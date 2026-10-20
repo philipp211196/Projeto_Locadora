@@ -1,0 +1,150 @@
+-- LOCADORA - atualizacao incremental para MySQL 8.0.16+
+-- Execute um backup antes de aplicar em banco com dados.
+-- Mantem os nomes das tabelas e colunas do SQL fornecido.
+CREATE DATABASE IF NOT EXISTS locadora CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE locadora;
+
+CREATE TABLE IF NOT EXISTS clientes (
+  id_cliente INT AUTO_INCREMENT PRIMARY KEY,
+  nome VARCHAR(120) NOT NULL,
+  cpf CHAR(11) NOT NULL UNIQUE,
+  telefone VARCHAR(20),
+  email VARCHAR(150),
+  endereco VARCHAR(255),
+  cnh VARCHAR(20) UNIQUE,
+  criado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS veiculos (
+  id_veiculo INT AUTO_INCREMENT PRIMARY KEY,
+  marca VARCHAR(80) NOT NULL,
+  modelo VARCHAR(100) NOT NULL,
+  ano SMALLINT UNSIGNED NOT NULL,
+  placa VARCHAR(10) NOT NULL UNIQUE,
+  cor VARCHAR(40),
+  valor_diaria DECIMAL(10,2) NOT NULL,
+  status ENUM('disponivel','alugado','manutencao','inativo') NOT NULL DEFAULT 'disponivel',
+  criado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT chk_valor_diaria CHECK (valor_diaria >= 0)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS locacoes (
+  id_locacao INT AUTO_INCREMENT PRIMARY KEY,
+  id_cliente INT NOT NULL,
+  id_veiculo INT NOT NULL,
+  data_inicio DATETIME NOT NULL,
+  data_prevista_devolucao DATETIME NOT NULL,
+  data_devolucao DATETIME NULL,
+  valor_diaria_contratada DECIMAL(10,2) NOT NULL,
+  valor_total DECIMAL(10,2) NULL,
+  status ENUM('ativa','finalizada','cancelada') NOT NULL DEFAULT 'ativa',
+  observacoes TEXT,
+  criado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_locacoes_clientes FOREIGN KEY (id_cliente) REFERENCES clientes(id_cliente),
+  CONSTRAINT fk_locacoes_veiculos FOREIGN KEY (id_veiculo) REFERENCES veiculos(id_veiculo),
+  CONSTRAINT chk_datas_locacao CHECK (data_prevista_devolucao >= data_inicio),
+  CONSTRAINT chk_diaria_contratada CHECK (valor_diaria_contratada >= 0),
+  CONSTRAINT chk_valor_total CHECK (valor_total IS NULL OR valor_total >= 0),
+  INDEX idx_locacoes_cliente (id_cliente),
+  INDEX idx_locacoes_veiculo_status (id_veiculo, status)
+) ENGINE=InnoDB;
+
+-- A recriacao de triggers nao remove registros de nenhuma tabela.
+DROP TRIGGER IF EXISTS trg_locacoes_before_insert;
+DROP TRIGGER IF EXISTS trg_locacoes_after_insert;
+DROP TRIGGER IF EXISTS trg_locacoes_before_update;
+DROP TRIGGER IF EXISTS trg_locacoes_after_update;
+DROP TRIGGER IF EXISTS trg_locacoes_before_delete;
+DROP TRIGGER IF EXISTS trg_veiculos_before_update;
+
+DELIMITER $$
+CREATE TRIGGER trg_locacoes_before_insert
+BEFORE INSERT ON locacoes FOR EACH ROW
+BEGIN
+  DECLARE v_status VARCHAR(20) DEFAULT NULL;
+  DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_status = NULL;
+  IF NEW.data_prevista_devolucao < NEW.data_inicio THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Data prevista anterior ao inicio';
+  END IF;
+  IF NEW.status = 'ativa' THEN
+    SELECT status INTO v_status FROM veiculos WHERE id_veiculo = NEW.id_veiculo FOR UPDATE;
+    IF v_status IS NULL OR v_status <> 'disponivel' THEN
+      SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Veiculo indisponivel para locacao';
+    END IF;
+    IF EXISTS (SELECT 1 FROM locacoes WHERE id_veiculo = NEW.id_veiculo AND status = 'ativa') THEN
+      SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Veiculo ja possui locacao ativa';
+    END IF;
+  END IF;
+END$$
+
+CREATE TRIGGER trg_locacoes_after_insert
+AFTER INSERT ON locacoes FOR EACH ROW
+BEGIN
+  IF NEW.status = 'ativa' THEN
+    UPDATE veiculos SET status = 'alugado' WHERE id_veiculo = NEW.id_veiculo;
+  END IF;
+END$$
+
+CREATE TRIGGER trg_locacoes_before_update
+BEFORE UPDATE ON locacoes FOR EACH ROW
+BEGIN
+  IF NEW.id_veiculo <> OLD.id_veiculo OR NEW.id_cliente <> OLD.id_cliente THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Nao altere cliente ou veiculo da locacao';
+  END IF;
+  IF OLD.status <> 'ativa' AND NEW.status <> OLD.status THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Locacao encerrada nao pode mudar de status';
+  END IF;
+  IF NEW.data_prevista_devolucao < NEW.data_inicio THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Data prevista anterior ao inicio';
+  END IF;
+  IF NEW.status = 'finalizada' AND NEW.data_devolucao IS NULL THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Informe a data real de devolucao';
+  END IF;
+  IF NEW.data_devolucao IS NOT NULL AND NEW.data_devolucao < NEW.data_inicio THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Devolucao anterior ao inicio';
+  END IF;
+END$$
+
+CREATE TRIGGER trg_locacoes_after_update
+AFTER UPDATE ON locacoes FOR EACH ROW
+BEGIN
+  IF OLD.status = 'ativa' AND NEW.status IN ('finalizada','cancelada') THEN
+    UPDATE veiculos SET status = 'disponivel'
+    WHERE id_veiculo = NEW.id_veiculo AND status = 'alugado';
+  END IF;
+END$$
+
+CREATE TRIGGER trg_locacoes_before_delete
+BEFORE DELETE ON locacoes FOR EACH ROW
+BEGIN
+  SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Preserve o historico: finalize ou cancele a locacao';
+END$$
+
+CREATE TRIGGER trg_veiculos_before_update
+BEFORE UPDATE ON veiculos FOR EACH ROW
+BEGIN
+  IF OLD.status = 'alugado' AND NEW.status <> 'alugado'
+     AND EXISTS (SELECT 1 FROM locacoes WHERE id_veiculo = OLD.id_veiculo AND status = 'ativa') THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Nao libere veiculo com locacao ativa';
+  END IF;
+END$$
+DELIMITER ;
+
+-- Testes de leitura (nao modificam dados):
+SELECT * FROM clientes LIMIT 10;
+SELECT * FROM veiculos LIMIT 10;
+SELECT * FROM locacoes LIMIT 10;
+
+-- OBSERVACOES:
+-- 1) CREATE TABLE IF NOT EXISTS nao altera colunas de tabelas preexistentes.
+--    Compare SHOW CREATE TABLE com o esquema esperado antes de migrar estruturas antigas.
+-- 2) Este modelo admite apenas UMA locacao ativa por veiculo, mesmo em datas futuras.
+-- 3) No C#, use database=locadora e nomes de colunas deste esquema.
+-- 4) O C# deve cancelar via UPDATE status='cancelada', nao DELETE.
+-- 5) A verificacao de status e os gatilhos devem ser testados na sua versao MySQL.
+USE locadora;
+
+DROP TRIGGER IF EXISTS trg_locacoes_before_insert;
+DROP TRIGGER IF EXISTS trg_locacoes_after_insert;
+DROP TRIGGER IF EXISTS trg_locacoes_before_update;
+DROP TRIGGER IF EXISTS trg_locacoes_after_update;
