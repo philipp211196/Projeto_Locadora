@@ -3,7 +3,7 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.13.35818.85 d17.13
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProjetoLocadora1", "..\..\Downloads\Locadora\Windows-FORM\Locadora de Veiculos\ProjetoLocadora1.csproj", "{04DDE914-95C8-B396-2310-262B5614298E}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProjetoLocadora1", "ProjetoLocadora1.csproj", "{04DDE914-95C8-B396-2310-262B5614298E}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -20,6 +20,6 @@ Global
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
-		SolutionGuid = {2452C1A1-1193-4824-B992-4EEBB76CBABC}
+		SolutionGuid = {1C07B5A5-ECD7-43B7-A409-7B801CDC8506}
 	EndGlobalSection
 EndGlobal
